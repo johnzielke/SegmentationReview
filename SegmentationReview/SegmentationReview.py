@@ -93,6 +93,7 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         self.pointListNode = None
         self.window_level = None   # To store current window/level settings
         self.segment_visiblity_states = {}  # Dictionary to store the visibility toggle of each segment
+        self.save_new_mask = False
         self.project_info = None
         self.shortcuts = []
         self.colorNode = None
@@ -272,7 +273,6 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         #ann_csv {[self.nifti_files[self.current_index]],[likert_score],[self.ui.comment.toPlainText()]}
         statuses, unchecked_files, unchecked_masks, checked_ids, id_subs_list = [], [], [], [], []
         list_of_checked = ann_csv['file'].values
-        list_of_checked = [self._construct_full_path(i) for i in list_of_checked]
         
         list_of_checked_masks = ann_csv['mask_path'].values
         #print(list_of_checked)
@@ -591,7 +591,6 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
                 # Store current mask label visibility states
                 self.store_segment_visiblity_states()
                 slicer.mrmlScene.RemoveNode(self.segmentation_node)
-                slicer.mrmlScene.RemoveNode(self.pointListNode)
                 #slicer.mrmlScene.Clear(0)
             if self.unique_case_flag:
                 while ret == 0 and self.current_index <= self.n_files:#-1:
@@ -647,7 +646,9 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             visibility = self.segment_visiblity_states.get(segment_id, True)
             self.segmentation_node.GetDisplayNode().SetSegmentVisibility(segment_id, visibility)
 
-    def load_nifti_file(self):
+    def load_nifti_file(self, unique=False):
+        if unique:
+            return self.load_nifti_file_unique()
         
         # Reset the slice views to clear any remaining segmentations
         
@@ -655,8 +656,6 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         if self.segmentation_node:
             slicer.mrmlScene.RemoveNode(self.segmentation_node)
             slicer.mrmlScene.RemoveNode(self.segmentEditorWidget.segmentationNode())
-        if self.pointListNode:
-            slicer.mrmlScene.RemoveNode(self.pointListNode)
             #slicer.mrmlScene.Clear(0)
         slicer.util.resetSliceViews()
         volume_metadata = None
@@ -713,8 +712,6 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             if self.segmentation_node:
                 slicer.mrmlScene.RemoveNode(self.segmentation_node)
                 slicer.mrmlScene.RemoveNode(self.segmentEditorWidget.segmentationNode())
-            if self.pointListNode:
-                slicer.mrmlScene.RemoveNode(self.pointListNode)
 
             self.volume_nodes.append(slicer.util.loadVolume(file_path))
             slicer.app.applicationLogic().PropagateVolumeSelection(0)
@@ -735,7 +732,9 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         self.segmentEditorWidget.setMRMLScene(slicer.mrmlScene)
         self.segmentEditorWidget.setMRMLSegmentEditorNode(slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentEditorNode"))
         self.segmentEditorWidget.setSegmentationNode(self.segmentation_node)
-        self.segmentEditorWidget.setSourceVolumeNode(self.volume_node)
+        source_volume_node = self.volume_nodes[0] if self.volume_nodes else None
+        if source_volume_node:
+            self.segmentEditorWidget.setSourceVolumeNode(source_volume_node)
         
         # Compute centroids and jump to them
         segStatLogic = SegmentStatistics.SegmentStatisticsLogic()
@@ -746,12 +745,20 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         
         self.pointListNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode")
         self.pointListNode.CreateDefaultDisplayNodes()
-        
-        markupsLogic = slicer.modules.markups.logic()
+
+        last_visible_centroid_ras = None
         for segmentId in stats["SegmentIDs"]:
             if self.segment_visiblity_states.get(segmentId, True):
-                centroid_ras = stats[segmentId, "LabelmapSegmentStatisticsPlugin.centroid_ras"]
-                markupsLogic.JumpSlicesToLocation(*centroid_ras, False)
+                last_visible_centroid_ras = stats[segmentId, "LabelmapSegmentStatisticsPlugin.centroid_ras"]
+
+        if last_visible_centroid_ras is not None:
+            crosshairNode = slicer.util.getNode("Crosshair")
+            crosshairNode.SetCrosshairRAS(last_visible_centroid_ras)
+            slicer.vtkMRMLSliceNode.JumpAllSlices(
+                slicer.mrmlScene,
+                *last_visible_centroid_ras,
+                slicer.vtkMRMLSliceNode.CenteredJumpSlice,
+            )
 
     def cleanup(self):
         """
