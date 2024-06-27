@@ -459,7 +459,7 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         
         # case 1: mapper cvs is present
         elif os.path.exists(self.joinpath(directory,"mapping.csv")):
-            logger.info('Found mappings between files an>>>>d masks') 
+            logger.info('Found mappings between files and masks') 
             #print("Found mappings between files and masks")
             self.mappings = pd.read_csv(self.joinpath(directory,"mapping.csv"))
             self.with_mapper_flag = True
