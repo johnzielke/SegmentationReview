@@ -93,7 +93,6 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         self.unique_case_flag=False
         self.finish_flag = False
         self.save_new_mask = False
-        self.pointListNode = None
         self.project_info = None
         self.shortcuts = []
         self.colorNode = None
@@ -276,7 +275,6 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         #ann_csv {[self.nifti_files[self.current_index]],[likert_score],[self.ui.comment.toPlainText()]}
         statuses, unchecked_files, unchecked_masks, checked_ids, id_subs_list = [], [], [], [], []
         list_of_checked = ann_csv['file'].values
-        list_of_checked = [self._construct_full_path(i) for i in list_of_checked]
         
         list_of_checked_masks = ann_csv['mask_path'].values
         #print(list_of_checked)
@@ -594,7 +592,6 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             self._remove_volume_nodes()
             if self.segmentation_node:
                 slicer.mrmlScene.RemoveNode(self.segmentation_node)
-                slicer.mrmlScene.RemoveNode(self.pointListNode)
                 #slicer.mrmlScene.Clear(0)
             if self.unique_case_flag:
                 while ret == 0 and self.current_index <= self.n_files:#-1:
@@ -630,8 +627,6 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         if self.segmentation_node:
             slicer.mrmlScene.RemoveNode(self.segmentation_node)
             slicer.mrmlScene.RemoveNode(self.segmentEditorWidget.segmentationNode())
-        if self.pointListNode:
-            slicer.mrmlScene.RemoveNode(self.pointListNode)
             #slicer.mrmlScene.Clear(0)
         slicer.util.resetSliceViews()
         volume_metadata = None
@@ -684,8 +679,6 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             if self.segmentation_node:
                 slicer.mrmlScene.RemoveNode(self.segmentation_node)
                 slicer.mrmlScene.RemoveNode(self.segmentEditorWidget.segmentationNode())
-            if self.pointListNode:
-                slicer.mrmlScene.RemoveNode(self.pointListNode)
 
             self.volume_nodes.append(slicer.util.loadVolume(file_path))
             slicer.app.applicationLogic().PropagateVolumeSelection(0)
@@ -718,13 +711,23 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         segStatLogic.getParameterNode().SetParameter("LabelmapSegmentStatisticsPlugin.centroid_ras.enabled", str(True))
         segStatLogic.computeStatistics()
         stats = segStatLogic.getStatistics()
-        self.pointListNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode")
-        self.pointListNode.CreateDefaultDisplayNodes()
+
+        # This chooses the last segment as the one to center on
+        # TODO: We might wanna customize this per project
         for segmentId in stats["SegmentIDs"]:
             centroid_ras = stats[segmentId,"LabelmapSegmentStatisticsPlugin.centroid_ras"]
             #print(segmentId,centroid_ras)
-            markupsLogic = slicer.modules.markups.logic()
-            markupsLogic.JumpSlicesToLocation(centroid_ras[0],centroid_ras[1],centroid_ras[2], False)
+            # markupsLogic = slicer.modules.markups.logic()
+            # markupsLogic.JumpSlicesToLocation(centroid_ras[0],centroid_ras[1],centroid_ras[2], False)
+
+        position_RAS = centroid_ras
+        crosshairNode = slicer.util.getNode("Crosshair")
+        # Set crosshair position
+        crosshairNode.SetCrosshairRAS(position_RAS)
+        # Center the position in all slice views
+        slicer.vtkMRMLSliceNode.JumpAllSlices(slicer.mrmlScene, *position_RAS, slicer.vtkMRMLSliceNode.CenteredJumpSlice)
+        # Make the crosshair visible
+        # crosshairNode.SetCrosshairMode(slicer.vtkMRMLCrosshairNode.ShowBasic)
 
         slicer.mrmlScene.AddNode(segmentEditorNode)
         self.segmentEditorWidget.setMRMLSegmentEditorNode(segmentEditorNode)
