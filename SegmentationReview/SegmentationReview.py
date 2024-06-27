@@ -12,6 +12,8 @@ import qt
 from datetime import datetime
 import SegmentStatistics
 import logging
+import json
+from functools import partial
 #from qt import QtCore, QtGui
 
 
@@ -42,9 +44,9 @@ class SegmentationReview(ScriptedLoadableModule):
     def __init__(self, parent):
         ScriptedLoadableModule.__init__(self, parent)
         self.parent.title = "SegmentationReview"  
-        self.parent.categories = ["Examples"]  
+        self.parent.categories = ["Review"]  
         self.parent.dependencies = []  
-        self.parent.contributors = ["Anna Zapaishchykova, Vasco Prudente, Dr. Benjamin H. Kann (AIM-Harvard)"]  
+        self.parent.contributors = ["Anna Zapaishchykova, Vasco Prudente, John Zielke, Dr. Benjamin H. Kann (AIM-Harvard)"]  
         self.parent.helpText = """
 Slicer3D extension for rating using Likert-type score Deep-learning generated segmentations, with segment editor funtionality. 
 Created to speed up the validation process done by a clinician - the dataset loads in one batch with no need to load masks and volumes separately.
@@ -74,7 +76,7 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         self.logic = None
         self._parameterNode = None
         self._updatingGUIFromParameterNode = False
-        self.volume_node = None
+        self.volume_nodes = []
         self.segmentation_node = None
         self.nifti_files = []
         self.segmentation_files = []
@@ -91,7 +93,9 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         self.pointListNode = None
         self.window_level = None   # To store current window/level settings
         self.segment_visiblity_states = {}  # Dictionary to store the visibility toggle of each segment
-
+        self.project_info = None
+        self.shortcuts = []
+        self.colorNode = None
 
 
     def setup(self):
@@ -257,6 +261,11 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         else:
             return self.joinpath(self.directory, path)
     
+    def _remove_volume_nodes(self):
+        for volume_node in self.volume_nodes:
+            slicer.mrmlScene.RemoveNode(volume_node)
+        self.volume_nodes = []
+
     def _restore_index(self, ann_csv, files_list, mask_list, mask_status_list=None):
         #print(files_list,mask_list)
         #print(self.unique_case_flag)
@@ -284,6 +293,7 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             for id_subj, img, mask in zip(self.mappings["subj_id"], self.mappings["img_path"], self.mappings["mask_path"]):
                 if id_subj not in checked_ids:
                     id_subs_list.append(id_subj)
+
                     unchecked_files.append(self._construct_full_path(img))
                     # check if mask is empty or nan 
                     if type(mask) == str:
@@ -299,7 +309,7 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             
         else:
             for i in range(len(files_list)):
-                if files_list[i] not in list_of_checked:
+                if files_list[i][0] not in list_of_checked:
                     unchecked_files.append(files_list[i])
                     unchecked_masks.append(mask_list[i])
                     statuses.append(mask_status_list[i])
@@ -308,6 +318,34 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         #return list of unchecked files
         return unchecked_files, unchecked_masks, statuses, id_subs_list, checked_ids
     
+    def switch_to_volume(self,index):
+        print(f"Switching to volume {index}")
+        slicer.util.setSliceViewerLayers(background=self.volume_nodes[index])
+
+
+    def _setup_shortcuts(self):
+        print("Setting up shortcuts")
+        for shortcut in self.shortcuts:
+            shortcut.disconnect()
+        self.shortcuts = []
+        if self.project_info is not None:
+            if "volumes" in self.project_info:
+                for i, vol in enumerate(self.project_info["volumes"]):
+                    if "shortcut" in vol:
+                        shortcut = qt.QShortcut(slicer.util.mainWindow())
+                        shortcut.setKey(qt.QKeySequence(vol["shortcut"]))
+                        shortcut.connect( "activated()", partial(self.switch_to_volume, i))
+                        self.shortcuts.append(shortcut)
+                        print(f"Added shortcut {vol['shortcut']} for volume {vol['prefix']}")
+
+    def _load_color_node(self):
+        if self.colorNode is not None:
+            slicer.mrmlScene.RemoveNode(self.colorNode)
+        color_table_file_name = "color_table.txt"
+        color_table_path = Path(self.joinpath(self.directory, color_table_file_name))
+        if color_table_path.exists():
+            self.colorNode = slicer.util.loadColorTable(color_table_path)
+        
     def getDefaultSourceVolumeNodeID(self):
         layoutManager = slicer.app.layoutManager()
         firstForegroundVolumeID = None
@@ -350,14 +388,23 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         directory = self.directory
         logger = logging.getLogger('SegmentationReview')
         logger.setLevel(logging.DEBUG)
-
+        
+        project_info_path = Path(directory) / "project.json"
+        if project_info_path.exists():
+            with open(project_info_path) as f:
+                self.project_info = json.load(f)
+                logger.info(f'Loaded project information from {project_info_path}')
+        else:
+            logger.info(f'No project information found at {project_info_path}')
+        self._setup_shortcuts()
+        self._load_color_node()
         # Set up logging to file
         fileHandler = logging.FileHandler(self.joinpath(directory,'segmentation_review.log'))
         fileHandler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
         logger.addHandler(fileHandler) 
         
         try:
-            slicer.mrmlScene.RemoveNode(self.volume_node) 
+            self._remove_volume_nodes()
             slicer.mrmlScene.RemoveNode(self.segmentation_node)
         except:
             pass
@@ -373,8 +420,11 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             self.unique_case_flag = True
             for id_subj, img, mask in zip(self.mappings["subj_id"], self.mappings["img_path"], self.mappings["mask_path"]):
                 # counting images
-                if os.path.exists(self.joinpath(directory,img)) and self._is_valid_extension(self.joinpath(directory,img)):
-                    self.nifti_files.append(self.joinpath(directory,img))
+                images = sorted(list(Path(directory).glob(img)))
+                if images and all([self._is_valid_extension(i.as_posix()) for i in images]):
+                    self.nifti_files.append((img,images))
+
+                    # self.nifti_files.append(self.joinpath(directory,img))
                     id_subs.append(id_subj)
                     # counting masks
                     # check if mask is 
@@ -407,7 +457,7 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         
         # case 1: mapper cvs is present
         elif os.path.exists(self.joinpath(directory,"mapping.csv")):
-            logger.info('Found mappings between files and masks') 
+            logger.info('Found mappings between files an>>>>d masks') 
             #print("Found mappings between files and masks")
             self.mappings = pd.read_csv(self.joinpath(directory,"mapping.csv"))
             self.with_mapper_flag = True
@@ -416,8 +466,10 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             #print("Loaded mappings between files and masks")
             for img, mask in zip(self.mappings["img_path"], self.mappings["mask_path"]):
                 # counting images
-                if os.path.exists(self.joinpath(directory,img)) and self._is_valid_extension(self.joinpath(directory,img)):
-                    self.nifti_files.append(self.joinpath(directory,img))
+                images = sorted(list(Path(directory).glob(img)))
+                if images and all([self._is_valid_extension(i.as_posix()) for i in images]):
+                    self.nifti_files.append((img,images))
+                    # self.nifti_files.append(self.joinpath(directory,img))
                     # counting masks
                     # check if mask is 
                     if type(mask) == str:
@@ -448,7 +500,8 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             #print("No mappings between files and masks")
             for file in os.listdir(directory):
                 if ".nii" in file and "_mask" not in file:  
-                    self.nifti_files.append(self.joinpath(directory,file)) #
+
+                    self.nifti_files.append((file,[Path(self.joinpath(directory,file))])) #
                     
                     if os.path.exists(self.joinpath(directory,file.split(".")[0]+"_mask.nii.gz")):
                         self.segmentation_files.append(self.joinpath(directory,file.split(".")[0]+"_mask.nii.gz"))
@@ -518,11 +571,11 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         self.likert_scores.append([self.current_index, likert_score, self.ui.comment.toPlainText()])
         # append data frame to CSV file
         if  self.finish_flag == False:
-            head, tail = os.path.split(self.nifti_files[self.current_index])
-            data = {'file': [self.nifti_files[self.current_index].replace(head,"").replace("/","").replace("\\","")],
+            
+            data = {'file': [self.nifti_files[self.current_index][0]],
                         'annotation': [self._rating_to_str(likert_score)],
                         'comment': [self.ui.comment.toPlainText()],
-                        'mask_path': [self.segmentation_files[self.current_index].replace(head,"").replace("/","").replace("\\","")],
+                        'mask_path': [Path(self.segmentation_files[self.current_index]).relative_to(self.directory).as_posix()],
                         'mask_status': [self._numerical_status_to_str(self.seg_mask_status[self.current_index])]}
             df = pd.DataFrame(data)   
             df.to_csv(self.joinpath(self.directory,"annotations.csv"), mode='a', index=False, header=False)
@@ -530,10 +583,10 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         # go to the next file if there is one
         ret = 0
         if self.current_index <= self.n_files:#-1:
-            if self.volume_node:
+            if self.volume_nodes:
                 # Store current window and level
                 self.store_current_window_level_settings()
-                slicer.mrmlScene.RemoveNode(self.volume_node)
+            self._remove_volume_nodes()
             if self.segmentation_node:
                 # Store current mask label visibility states
                 self.store_segment_visiblity_states()
@@ -568,15 +621,19 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
 
     def store_current_window_level_settings(self):
         """Store current HU window and level settings."""
-        self.window_level = (self.volume_node.GetDisplayNode().GetWindow(), self.volume_node.GetDisplayNode().GetLevel())
+        volume_node = self.volume_nodes[0] if self.volume_nodes else None
+        if volume_node:
+            self.window_level = (volume_node.GetDisplayNode().GetWindow(), volume_node.GetDisplayNode().GetLevel())
 
     def restore_window_level_settings(self):
-        if self.window_level is not None:
-            self.volume_node.GetDisplayNode().SetAutoWindowLevel(False)
-            self.volume_node.GetDisplayNode().SetWindow(self.window_level[0])
-            self.volume_node.GetDisplayNode().SetLevel(self.window_level[1])
-        else:
-            self.volume_node.GetDisplayNode().SetAutoWindowLevel(True)
+        volume_node = self.volume_nodes[0] if self.volume_nodes else None
+        if volume_node:
+            if self.window_level is not None:
+                volume_node.GetDisplayNode().SetAutoWindowLevel(False)
+                volume_node.GetDisplayNode().SetWindow(self.window_level[0])
+                volume_node.GetDisplayNode().SetLevel(self.window_level[1])
+            else:
+                volume_node.GetDisplayNode().SetAutoWindowLevel(True)
 
     def store_segment_visiblity_states(self):
         """Store the visibility states of mask labels."""
@@ -590,41 +647,86 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             visibility = self.segment_visiblity_states.get(segment_id, True)
             self.segmentation_node.GetDisplayNode().SetSegmentVisibility(segment_id, visibility)
 
-
-    def load_nifti_file(self, unique=False):
-        """Load NIFTI file and associated segmentation."""
-        for node in [self.volume_node, self.segmentation_node, self.pointListNode, self.segmentEditorWidget.segmentationNode()]:
-            if node:
-                slicer.mrmlScene.RemoveNode(node)
+    def load_nifti_file(self):
+        
+        # Reset the slice views to clear any remaining segmentations
+        
+        self._remove_volume_nodes()
+        if self.segmentation_node:
+            slicer.mrmlScene.RemoveNode(self.segmentation_node)
+            slicer.mrmlScene.RemoveNode(self.segmentEditorWidget.segmentationNode())
+        if self.pointListNode:
+            slicer.mrmlScene.RemoveNode(self.pointListNode)
+            #slicer.mrmlScene.Clear(0)
         slicer.util.resetSliceViews()
+        volume_metadata = None
+        if self.project_info is not None:
+            if "volumes" in self.project_info:
+                volume_metadata = self.project_info["volumes"]
+        files = list(self.nifti_files[self.current_index][1])
+        if volume_metadata is not None:
+            # Add files in the order specified in the metadata
+            for vol in volume_metadata:
+                
+                for i in range(len(files)):
+                    if files[i].name.startswith(vol["prefix"]):
+                        self.volume_nodes.append(slicer.util.loadVolume(files[i]))
+                        files.pop(i)
+                        break
+        # Add any remaining files
+        for file_path in files:
+            self.volume_nodes.append(slicer.util.loadVolume(file_path))
         
-        if unique:
-            if self.current_index < self.n_files and self.id_subs[self.current_index] in self.id_subs_checked:
-                return 0
-            elif self.current_index == self.n_files:
-                return 1
-
-        # Pause rendering until all data is loaded
-        slicer.app.layoutManager().setRenderPaused(True)
-
-        self.volume_node = slicer.util.loadVolume(self.nifti_files[self.current_index])
-        # Adjust window/level based on the previous settings, if any.
+        # Restore window/level based on the previous settings, if any.
         self.restore_window_level_settings()
-        
+        slicer.app.applicationLogic().PropagateVolumeSelection(0)
         try:
-            self.segmentation_node = slicer.util.loadSegmentation(self.segmentation_files[self.current_index])
+            segmentation_file_path = self.segmentation_files[self.current_index]
+            properties = {}
+            if self.colorNode is not None:
+                properties["colorNodeID"] = self.colorNode.GetID()
+            self.segmentation_node = slicer.util.loadSegmentation(segmentation_file_path, properties=properties)
+            self.segmentation_node.GetDisplayNode().SetColor(self.segmentation_color)
             # Restore the segment visibility toggles from the previous segmentation, if any.
             self.restore_segment_visiblity_states()
-            # Set the segmentation node to the segment editor widget
-            self.set_segmentation_and_mask_for_segmentation_editor()
+            self.set_segmentation_and_mask_for_segmentation_editor() 
         except:
-            if not unique:
-                self.enter()
+            #print("no mask, creating one")  
+            # Create or get the segmentation node
+            self.enter()
+     
+    def load_nifti_file_unique(self): 
+        # Reset the slice views to clear any remaining segmentations
+        slicer.util.resetSliceViews()
+        # check if for this id we already found a file
+        # if yes, load it
+        # if no, load the first file
+        if self.current_index <= self.n_files-1 and self.id_subs[self.current_index] in self.id_subs_checked: 
+            #print("Skipping since already found a good file for this id",self.id_subs[self.current_index])
+            return 0
+        elif self.current_index == self.n_files:
+            #print("+All files checked")
+            return 1
+        else:
+            file_path = self.nifti_files[self.current_index]
+            self._remove_volume_nodes()
+            if self.segmentation_node:
+                slicer.mrmlScene.RemoveNode(self.segmentation_node)
+                slicer.mrmlScene.RemoveNode(self.segmentEditorWidget.segmentationNode())
+            if self.pointListNode:
+                slicer.mrmlScene.RemoveNode(self.pointListNode)
 
-        # Resume rendering to show the loaded data
-        slicer.app.layoutManager().setRenderPaused(False)
-        
-        return None
+            self.volume_nodes.append(slicer.util.loadVolume(file_path))
+            slicer.app.applicationLogic().PropagateVolumeSelection(0)
+            
+            try:
+                segmentation_file_path = self.segmentation_files[self.current_index]
+                self.segmentation_node = slicer.util.loadSegmentation(segmentation_file_path)
+                self.segmentation_node.GetDisplayNode().SetColor(self.segmentation_color)
+                self.set_segmentation_and_mask_for_segmentation_editor() 
+            except:
+                pass   
+
 
     def set_segmentation_and_mask_for_segmentation_editor(self):
         slicer.app.processEvents()
