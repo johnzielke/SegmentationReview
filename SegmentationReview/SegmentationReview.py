@@ -347,7 +347,11 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         color_table_path = Path(self.joinpath(self.directory, color_table_file_name))
         if color_table_path.exists():
             self.colorNode = slicer.util.loadColorTable(color_table_path)
-        
+
+    def _adjust_slicer_settings(self):
+        qt.QSettings().setValue("SubjectHierarchy/ResetFieldOfViewOnShowVolume", False)
+        qt.QSettings().setValue("SubjectHierarchy/ResetViewOrientationOnShowVolume", False)
+
     def getDefaultSourceVolumeNodeID(self):
         layoutManager = slicer.app.layoutManager()
         firstForegroundVolumeID = None
@@ -385,7 +389,7 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         self.segmentEditorWidget.setMRMLSegmentEditorNode(self.parameterSetNode)
    
     def onAtlasDirectoryChanged(self, directory):
-        
+        self._adjust_slicer_settings()
         self.directory = os.path.normpath(directory)
         directory = self.directory
         logger = logging.getLogger('SegmentationReview')
