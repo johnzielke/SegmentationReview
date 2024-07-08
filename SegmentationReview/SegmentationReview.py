@@ -97,7 +97,12 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         self.project_info = None
         self.shortcuts = []
         self.colorNode = None
-
+        self.radio_button_layout = None
+        self.rating_mapping = {1: "Acceptable with no changes", 2: "Acceptable with minor changes", 
+                3: "Unacceptable with major changes", 
+                4: "Unacceptable and not visible",
+                5: "Bad images"}
+        self.value_buttons = {}
 
     def setup(self):
         """
@@ -128,6 +133,7 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         # "setMRMLScene(vtkMRMLScene*)" slot.
         uiWidget.setMRMLScene(slicer.mrmlScene)
 
+        self._setup_radio_buttons()
         # Create logic class. Logic implements all computations that should be possible to run
         # in batch mode, without a graphical user interface.
         self.logic = SlicerLikertDLratingLogic()
@@ -228,7 +234,27 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
                 self.sourceVolumeNodeID = self.getDefaultSourceVolumeNodeID()
                 self.segmentEditorWidget.setSourceVolumeNodeID(self.sourceVolumeNodeID)
         self.initializeParameterNode()
-    
+
+    def _setup_radio_buttons(self):
+        print(self.ui.buttongroup)
+        print(dir(self.ui.buttongroup))
+        #remove all children
+        
+        self.value_buttons = {}
+        vbox = self.ui.buttongroup.layout()
+        if vbox is None:
+            vbox = qt.QVBoxLayout()
+        else:
+            for button in self.ui.buttongroup.findChildren(qt.QRadioButton):
+                button.deleteLater()
+        #add buttons
+        for k, value in self.rating_mapping.items():
+            button = qt.QRadioButton(f"{k} - {value}")
+            vbox.addWidget(button)
+            self.value_buttons[k] = button
+        vbox.addStretch(1)
+        self.ui.buttongroup.setLayout(vbox)
+
     def overwrite_mask_clicked(self):
         # overwrite self.segmentEditorWidget.segmentationNode()
         self.segmentation_node = slicer.mrmlScene.GetFirstNodeByClass('vtkMRMLSegmentationNode')
@@ -402,6 +428,10 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             logger.info(f'No project information found at {project_info_path}')
         self._setup_shortcuts()
         self._load_color_node()
+        if self.project_info is not None:
+            if "ratings" in self.project_info:
+                self.rating_mapping = {int(k) : v for k,v in self.project_info["ratings"].items()}
+                self._setup_radio_buttons()
         # Set up logging to file
         fileHandler = logging.FileHandler(self.joinpath(directory,'segmentation_review.log'))
         fileHandler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
@@ -547,29 +577,14 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         return {0: "No mask found", 1: "Cannot load mask", 2: "Mask loaded, no edits", 3:"Mask edited"}[status]   
     
     def _rating_to_str(self, rating):
-        return {1: "Acceptable with no changes", 2: "Acceptable with minor changes", 
-                3: "Unacceptable with major changes", 
-                4: "Unacceptable and not visible",
-                5: "Bad images"}[rating]  
+        return self.rating_mapping[rating]  
     
     def save_and_next_clicked(self):
         likert_score = 0
-        
-        if self.ui.radioButton_1.isChecked():
-            likert_score=1
-            if self.unique_case_flag:
-                self.id_subs_checked.append(self.id_subs[self.current_index])
-                #print("found the file for this id",self.current_index,self.id_subs[self.current_index])
-                # update current index display
-                #self.ui.status_checked.setText("Checked: "+ str(self.current_index) + " / "+str(self.n_files))
-        elif self.ui.radioButton_2.isChecked():
-            likert_score=2
-        elif self.ui.radioButton_3.isChecked():
-            likert_score=3
-        elif self.ui.radioButton_4.isChecked():
-            likert_score=4
-        elif self.ui.radioButton_5.isChecked():
-            likert_score=5
+        for k, v in self.value_buttons.items():
+            if v.isChecked():
+                likert_score = k
+                break
        
             
         self.likert_scores.append([self.current_index, likert_score, self.ui.comment.toPlainText()])
@@ -577,7 +592,7 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         if  self.finish_flag == False:
             
             data = {'file': [self.nifti_files[self.current_index][0]],
-                        'annotation': [self._rating_to_str(likert_score)],
+                        'annotation': [str(likert_score)],
                         'comment': [self.ui.comment.toPlainText()],
                         'mask_path': [Path(self.segmentation_files[self.current_index]).relative_to(self.directory).as_posix()],
                         'mask_status': [self._numerical_status_to_str(self.seg_mask_status[self.current_index])]}
@@ -847,8 +862,7 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         The module GUI is updated to show the current state of the parameter node.
         """
 
-        if self._parameterNode is None or self._updatingGUIFromParameterNode:
-            return
+    # Removed duplicate joinpath definition
 
         # Make sure GUI changes do not call updateParameterNodeFromGUI (it could cause infinite loop)
         self._updatingGUIFromParameterNode = True
