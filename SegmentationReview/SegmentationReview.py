@@ -236,9 +236,6 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         self.initializeParameterNode()
 
     def _setup_radio_buttons(self):
-        print(self.ui.buttongroup)
-        print(dir(self.ui.buttongroup))
-        #remove all children
         
         self.value_buttons = {}
         vbox = self.ui.buttongroup.layout()
@@ -247,7 +244,6 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         else:
             for button in self.ui.buttongroup.findChildren(qt.QRadioButton):
                 button.deleteLater()
-        #add buttons
         for k, value in self.rating_mapping.items():
             button = qt.QRadioButton(f"{k} - {value}")
             vbox.addWidget(button)
@@ -260,15 +256,17 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         self.segmentation_node = slicer.mrmlScene.GetFirstNodeByClass('vtkMRMLSegmentationNode')
         file_path = self.joinpath(self.directory,"t.seg.nrrd")
         # Save the segmentation node to file as nifti
-        self.file_path_nifti = str(self.nifti_files[self.current_index]).split(".")[0]+f"_mask_{datetime.now().strftime('%Y%m%d_%H%M%S')}.nii.gz"
+        # self.file_path_nifti = str(self.nifti_files[self.current_index]).split(".")[0]+f"_mask_{datetime.now().strftime('%Y%m%d_%H%M%S')}.nii.gz"
+        seg_path = self.segmentation_files[self.current_index]
+        seg_path = seg_path.replace(".nii.gz", f"_edit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.nii.gz")
         self.seg_mask_status[self.current_index] = 3
         # add to the list of segmentation files
-        self.segmentation_files[self.current_index] = self.file_path_nifti
+        self.segmentation_files[self.current_index] = seg_path
         # Save the segmentation node to file
         slicer.util.saveNode(self.segmentation_node, file_path)
         img = sitk.ReadImage(file_path)
         
-        sitk.WriteImage(img, self.file_path_nifti)
+        sitk.WriteImage(img, seg_path)
         
         #delete the temporary file
         try:
