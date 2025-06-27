@@ -578,6 +578,9 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         return self.rating_mapping[rating]  
     
     def save_and_next_clicked(self):
+        if self.project_info is not None and self.project_info.get("save_mask_on_next", False):
+                # Save the segmentation node to file
+                self.overwrite_mask_clicked()
         likert_score = 0
         for k, v in self.value_buttons.items():
             if v.isChecked():
