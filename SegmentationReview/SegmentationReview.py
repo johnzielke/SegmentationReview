@@ -258,7 +258,10 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
         # Save the segmentation node to file as nifti
         # self.file_path_nifti = str(self.nifti_files[self.current_index]).split(".")[0]+f"_mask_{datetime.now().strftime('%Y%m%d_%H%M%S')}.nii.gz"
         seg_path = self.segmentation_files[self.current_index]
-        seg_path = seg_path.replace(".nii.gz", f"_edit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.nii.gz")
+        if seg_path.endswith(".nii.gz"):
+            seg_path = seg_path.replace(".nii.gz", f"_edit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.nii.gz")
+        elif seg_path.endswith(".nii"):
+            seg_path = seg_path.replace(".nii", f"_edit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.nii")
         self.seg_mask_status[self.current_index] = 3
         # add to the list of segmentation files
         self.segmentation_files[self.current_index] = seg_path
@@ -671,7 +674,7 @@ class SegmentationReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
             return self.load_nifti_file_unique()
         
         # Reset the slice views to clear any remaining segmentations
-        
+        print(f"Loaded volume {self.nifti_files[self.current_index][0]} with mask {self.segmentation_files[self.current_index] if self.segmentation_files else 'None'}")
         self._remove_volume_nodes()
         if self.segmentation_node:
             slicer.mrmlScene.RemoveNode(self.segmentation_node)
